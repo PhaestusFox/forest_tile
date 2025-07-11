@@ -24,7 +24,8 @@ impl Plugin for InfiniTilePlugin {
         app.init_resource::<NoiseGenerator>();
         app.add_plugins(Material2dPlugin::<shader::TileMaterial>::default());
         app.add_systems(Startup, spawn_screen_rect)
-            .add_systems(PreUpdate, (on_image_load, on_resize, update_noise_map))
+            .add_systems(First, (on_image_load, on_resize).before(update_noise_map))
+            .add_systems(PreUpdate, update_noise_map)
             .add_observer(load_noise_map);
     }
 }
@@ -45,6 +46,7 @@ fn spawn_screen_rect(
             shader::TileMaterial {
                 texture: asset_server.load("tiles/default.png"),
                 noise: Handle::default(),
+                decor_array: Handle::default(),
             }
         })),
     ));
@@ -55,18 +57,62 @@ struct NoiseGenerator {
     noise: noise::SuperSimplex,
 }
 
+const QUADS: [[IVec2; 4]; 4] = [
+    [
+        IVec2::new(0, 0), // <-
+        IVec2::new(0, -1),
+        IVec2::new(-1, -1),
+        IVec2::new(-1, 0),
+    ],
+    [
+        IVec2::new(0, 1),
+        IVec2::new(0, 0),
+        IVec2::new(-1, 0),
+        IVec2::new(-1, 1),
+    ],
+    [
+        IVec2::new(1, 1),
+        IVec2::new(1, 0),
+        IVec2::new(0, 0),
+        IVec2::new(0, 1),
+    ],
+    [
+        IVec2::new(1, 0),
+        IVec2::new(1, -1),
+        IVec2::new(0, -1),
+        IVec2::new(0, 0),
+    ],
+];
+
 impl NoiseGenerator {
     fn update_image(&self, image: &mut Image, offset: Vec2) {
-        let size = image.size();
-        for y in 0..size.y as usize {
-            for x in 0..size.x as usize {
-                let nx = x as f32 + offset.x;
-                let ny = y as f32 + offset.y;
-                let value = self.noise.get([nx as f64, ny as f64]) as f32;
-                let color = Color::linear_rgb(value, value, value);
-                if let Err(e) = image.set_color_at(x as u32, y as u32, color) {
-                    warn!("Failed to set color at ({}, {}): {}", x, y, e);
-                };
+        let size = image.size().as_ivec2();
+        let l = offset.x.fract() < 0.5;
+        let b = offset.y.fract() < 0.5;
+        let q = match (
+            if offset.x < 0. { l } else { !l },
+            if offset.y < 0. { b } else { !b },
+        ) {
+            (true, true) => &QUADS[0],
+            (true, false) => &QUADS[1],
+            (false, false) => &QUADS[2],
+            (false, true) => &QUADS[3],
+        };
+
+        let offset = offset.as_ivec2();
+        for (w, o) in q.iter().enumerate() {
+            let offset = offset + *o;
+            for y in 0..size.y {
+                for x in 0..size.x {
+                    let nx = x + offset.x;
+                    let ny = y + offset.y;
+                    let value = self.noise.get([nx as f64, ny as f64]) as f32;
+                    let value = (value + 1.0) / 2.0; // Normalize to [0, 1]
+                    let color = Color::linear_rgb(value, value, value);
+                    if let Err(e) = image.set_color_at_3d(x as u32, y as u32, w as u32, color) {
+                        warn!("Failed to set color at ({}, {}): {}", x, y, e);
+                    };
+                }
             }
         }
     }
@@ -82,17 +128,30 @@ impl FromWorld for NoiseGenerator {
 
 fn update_noise_map(
     noise: Res<NoiseGenerator>,
-    materials: Res<Assets<shader::TileMaterial>>,
-    query: Query<&MeshMaterial2d<shader::TileMaterial>>,
+    mut materials: ResMut<Assets<TileMaterial>>,
+    query: Query<&MeshMaterial2d<TileMaterial>>,
     camera: Single<&Transform, With<Camera2d>>,
     mut images: ResMut<Assets<Image>>,
+    mut last: Local<IVec2>,
 ) {
-    let offset = camera.translation.truncate();
-    for material in query.iter() {
-        let Some(material) = materials.get(&material.0) else {
+    let mut offset = camera.translation.truncate();
+    for material in &query {
+        let Some(material) = materials.get_mut(&material.0) else {
             warn!("Material not found for noise update");
             continue;
         };
+
+        let Some(tile) = images.get(&material.texture) else {
+            warn!("Tile Texture not found for material");
+            continue;
+        };
+        offset /= tile.size_f32();
+
+        // if offset == *last {
+        //     return; // No change in offset, skip update
+        // }
+
+        // *last = offset;
 
         let Some(image) = images.get_mut(&material.noise) else {
             warn!("Noise Texture not found for material");
@@ -127,17 +186,18 @@ fn load_noise_map(
     let IVec2 {
         x: x_tiles,
         y: y_tiles,
-    } = (screen_size / tile.size_f32()).ceil().as_ivec2();
+    } = (screen_size / tile.size_f32()).ceil().as_ivec2() + IVec2::splat(2);
 
     if material.noise == Handle::default() {
+        info!("Creating new noise texture for material");
         material.noise = images.add(Image::new(
             Extent3d {
                 width: x_tiles as u32,
                 height: y_tiles as u32,
-                depth_or_array_layers: 1,
+                depth_or_array_layers: 4,
             },
             bevy::render::render_resource::TextureDimension::D2,
-            vec![0; (x_tiles * y_tiles * 4) as usize],
+            vec![255; (x_tiles * y_tiles * 4 * 4) as usize],
             bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
             RenderAssetUsages::all(),
         ));
@@ -153,7 +213,7 @@ fn load_noise_map(
         image.resize(Extent3d {
             width: x_tiles as u32,
             height: y_tiles as u32,
-            depth_or_array_layers: 1,
+            depth_or_array_layers: 4,
         });
     }
 }

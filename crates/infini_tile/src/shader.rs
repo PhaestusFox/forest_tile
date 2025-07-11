@@ -13,8 +13,11 @@ pub struct TileMaterial {
     #[texture(0)]
     #[sampler(1)]
     pub texture: Handle<Image>,
-    #[texture(2)]
+    #[texture(2, dimension = "2d_array")]
     pub noise: Handle<Image>,
+    #[texture(3, dimension = "2d_array")]
+    #[sampler(4)]
+    pub decor_array: Handle<Image>,
 }
 
 impl Material2d for TileMaterial {
