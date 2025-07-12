@@ -113,10 +113,19 @@ fn fragment(mesh: VertexOutput) -> @location(0) vec4<f32> {
     let local_x = floor((cell_x - c_x) + (cell_w / 2.)) + 0.5;
     let local_y = floor((cell_y - c_y) + (cell_h / 2.)) + 0.5;
     
-    let n = fbm(vec2<f32>(mesh.uv.x, mesh.uv.y));
-    if true {
-        return vec4<f32>(n, n, n, 1.0);
-    }
+    // let n = find_edge(i32(mesh.uv.x), i32(mesh.uv.y));
+    // if true {
+    //     var out = vec4<f32>(n, n, n, 1.0);
+    //     if n < 0. {
+    //      out.r = 1.;
+    //     }
+    //     if n > 1. {
+    //         out.b = 0.;
+    //         out.r = 0.;
+    //         out.g = 1.;
+    //     }
+    //     return out;
+    // }
 
     let layer = select_decor(i32(cell_x), i32(cell_y));
     if layer != -1 {
@@ -170,41 +179,112 @@ fn vertex(vertex: Vertex) -> VertexOutput {
     return out;
 }
 
+fn find_edge(x: i32, y: i32) -> f32 {
+    let nx = f32(x) / 100.;
+    let ny = f32(y) / 100.;
+    let n = fbm(vec2<f32>(nx, ny));
+    return n;
+}
+
 fn select_decor(x: i32, y: i32) -> i32 {
-    var noise = fbm(floor(vec2<f32>(f32(x), f32(y))));
-    let noise_up = fbm(floor(vec2<f32>(f32(x), f32(y + 1))));
-    let noise_down = fbm(floor(vec2<f32>(f32(x), f32(y - 1))));
-    let noise_left = fbm(floor(vec2<f32>(f32(x - 1), f32(y))));
-    let noise_right = fbm(floor(vec2<f32>(f32(x + 1), f32(y))));
+    let nx = f32(x) / 100.;
+    let ny = f32(y) / 100.;
+    var noise = fbm(vec2<f32>(nx, ny));
+    let noise_up = fbm(vec2<f32>(nx, ny + 0.1));
+    let noise_down = fbm(vec2<f32>(nx, ny - 0.1));
+    let noise_left = fbm(vec2<f32>(nx - 0.1, ny));
+    let noise_right = fbm(vec2<f32>(nx + 0.1, ny));
     noise = (noise + 1) / 2.; // Normalize to [0, 1]
-
-    let g_h = (noise_left - noise_right) / 2.;
-    let g_v = (noise_up - noise_down) / 2.;
-    if g_h > g_v && g_h > 0.3 {
-        return 1; // poppy
-    }
-
     let j = x >> 31;
     let k = y >> 31;
     let t = ((y ^ k) + k);
     let i = ((((x ^ j) + j) * (-t) - 1) * 569) % 258161;
+    let n = x + y * 2;
 
-    if i % 7 != 0 {
-        return -1; // No decor selected, return -1
+    let g_h = (noise_left - noise_right);
+    let g_v = (noise_up - noise_down);
+    var tg: f32 = 0.;
+    if (n % 1024) > 512 {
+        tg = (g_h - g_v) / 2.;
+    } else {
+        tg = (g_v - g_h) / 2.;
+    };
+    if tg > 0.01 && tg < 0.03 {
+        // if noise 
+        if i % 3 == 0 {
+            return 7; // dirt
+        }
+        if i % 7 == 0 {
+            return 8; // coarse dirt
+        }
+        if i % 13 == 0 {
+            return 9; // rooted dirt
+        }
+        return 7; // dirt
     }
 
-    
-    // if noise < 0 {
-    //     if x % 128 == y % 128 {
-    //         return 3; // nether rose
-    //     } else if x % y == 0 {
-    //         return 1; // poppy
-    //     } else if y % x == 0 {
-    //         return 0; // dandelion
-    //     }
+
+    // if i % 17 != 0 {
+    //     return -1; // No decor selected, return -1
     // }
 
-    return 0;
+    noise = noise * 2 - 1; // Normalize to [-1, 1]
+    {
+        let n_up = fbm(vec2<f32>(nx, ny + 0.01));
+        let n_down = fbm(vec2<f32>(nx, ny - 0.01));
+        let n = fbm(vec2<f32>(nx, ny));
+        let g_up = n_up - noise;
+        let g_down = n_down - noise;
+        if g_up < 0.001 && g_up > 0 && (x * 3 + y) % 21 == 0 {
+            return 15;
+        } else if g_down > -0.001 && g_down < 0 && (x * 3 + y) % 21 == 1 {
+            return 14;
+        }
+    }
+
+    if noise > noise_up && noise > noise_down { 
+        if (i + x + y) % 13 == 0 {
+            return 10 + (i % 4); // mushrooms
+        } else if (i + x * 6 + y * 5) % 21 == 0 {
+            return i % 14;
+        } else {
+            return -1; // brown mushroom
+        }
+    }
+    if noise > noise_down && noise_left + noise_right > 0. {
+        if i % 5 == 0 {
+            if noise_down + noise_up > noise && noise_left + noise_right < noise {
+                return 3;
+            } else if noise_down + noise_left > noise && noise_up + noise_right < noise {
+                return 4;
+            } else if noise_up + noise_left > noise && noise_down + noise_right > noise && noise_down < 0.{
+                return 5;
+            } else if noise_down + noise_right > noise && noise_up + noise_left < noise {
+                return 6;
+            } else {
+                return 3 + (i % 4); // tulips
+            }
+        } else {
+            return -1;
+        }
+    }
+    if noise > noise_left || noise > noise_right {
+        if i % 17 == 0 {
+            return (i + x + y) % 2; // flowers
+        }
+    }
+
+    // 0 - 1 are flowers
+    // 2 is wither rose
+    // 3 - 6 are tulips
+    // 7 - 9 are dirt variants
+    // 10 - 13 are mushrooms
+    // 14 - 15 are rose bushes
+
+    if noise < noise_up && noise < noise_down && noise < noise_left && noise < noise_right && noise_down > noise_up && noise_left< noise_right && noise > 0.{
+        return 2; // wither rose
+    }
+    return -1; // No decor selected, return -1
 }
 
 
@@ -269,14 +349,14 @@ fn simplexNoise2(v: vec2<f32>) -> f32 {
     return 130. * dot(m, g);
 }
 
-const m2: mat2x2<f32> = mat2x2<f32>(vec2(0.8, 0.6), vec2(-0.6, 0.8));
+const m2: mat2x2<f32> = mat2x2<f32>(vec2(0.1, 0.15), vec2(-0.15, 0.1));
 
 fn fbm(p: vec2<f32>) -> f32 {
     var f: f32 = -0.;
     var v = p;
     f = f + 0.5000 * simplexNoise2(v); v = m2 * v * 2.02;
     f = f + 0.2500 * simplexNoise2(v); v = m2 * v * 2.03;
-    f = f + 0.1250 * simplexNoise2(v); v = m2 * v * 2.01;
-    f = f + 0.0625 * simplexNoise2(v);
-    return f / 0.9375;
+    f = f + 0.250 * simplexNoise2(v); v = m2 * v * 2.01;
+    f = f + 0.1625 * simplexNoise2(v);
+    return f;
 }
